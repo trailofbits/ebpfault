@@ -14,6 +14,8 @@ add_subdirectory("libraries")
 
 project("ebpfault")
 
+include("cmake/options.cmake")
+
 function(ebpfault)
   add_executable(ebpfault
     src/main.cpp
@@ -36,6 +38,10 @@ function(ebpfault)
     error
     utils
   )
+
+  if(EBPFAULT_ENABLE_INSTALL)
+    install(TARGETS ebpfault DESTINATION "bin")
+  endif()
 endfunction()
 
 ebpfault()
