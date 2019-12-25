@@ -1,0 +1,1 @@
+ebpfault is a software testing utility that is capable of injecting faults in syscalls by using eBPF. It supports both system-wide and per-process faults, and can either attach to existing processes by using a PID list or start the program directly.
