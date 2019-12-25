@@ -129,7 +129,15 @@ SuccessOrStringError FaultInjector::generateBPFProgram() {
   llvm::IRBuilder<> builder(d->context);
   builder.SetInsertPoint(entry_bb);
 
-  auto current_pid_tgid = bpf_get_current_pid_tgid(builder);
+  auto bpf_syscall_interface_exp =
+      tob::ebpf::BPFSyscallInterface::create(builder);
+  if (!bpf_syscall_interface_exp.succeeded()) {
+    return bpf_syscall_interface_exp.error();
+  }
+
+  auto bpf_syscall_interface = bpf_syscall_interface_exp.takeValue();
+
+  auto current_pid_tgid = bpf_syscall_interface->getCurrentPidTgid();
 
   auto current_tgid =
       builder.CreateBinOp(llvm::Instruction::And, current_pid_tgid,
@@ -161,7 +169,9 @@ SuccessOrStringError FaultInjector::generateBPFProgram() {
     }
 
     builder.SetInsertPoint(fail_syscall_bb);
-    auto gen_status = generateFaultSelector(builder);
+    auto gen_status =
+        generateFaultSelector(builder, *bpf_syscall_interface.get());
+
     if (gen_status.failed()) {
       return gen_status.error();
     }
@@ -175,8 +185,10 @@ SuccessOrStringError FaultInjector::generateBPFProgram() {
   return {};
 }
 
-SuccessOrStringError
-FaultInjector::generateFaultSelector(llvm::IRBuilder<> &builder) {
+SuccessOrStringError FaultInjector::generateFaultSelector(
+    llvm::IRBuilder<> &builder,
+    ebpf::BPFSyscallInterface &bpf_syscall_interface) {
+
   struct FaultRange final {
     std::uint8_t start{0U};
     std::uint8_t end{0U};
@@ -201,7 +213,7 @@ FaultInjector::generateFaultSelector(llvm::IRBuilder<> &builder) {
   auto current_basic_block = builder.GetInsertBlock();
   auto current_function = current_basic_block->getParent();
 
-  auto random_u32_value = bpf_get_prandom_u32(builder);
+  auto random_u32_value = bpf_syscall_interface.getPrandomU32();
 
   random_u32_value = builder.CreateBinOp(
       llvm::Instruction::URem, random_u32_value, builder.getInt32(100));
@@ -209,7 +221,6 @@ FaultInjector::generateFaultSelector(llvm::IRBuilder<> &builder) {
   std::size_t counter{0U};
 
   for (const auto &fault : fault_range) {
-
     auto greater_or_equal_cond =
         builder.CreateICmpUGE(random_u32_value, builder.getInt32(fault.start));
 
@@ -239,8 +250,8 @@ FaultInjector::generateFaultSelector(llvm::IRBuilder<> &builder) {
 
     builder.SetInsertPoint(fail_syscall_bb);
 
-    bpf_override_return(builder, current_function->arg_begin(),
-                        builder.getInt64(fault.exit_code));
+    bpf_syscall_interface.overrideReturn(current_function->arg_begin(),
+                                         fault.exit_code);
 
     builder.CreateRet(builder.getInt64(0));
 
@@ -288,64 +299,5 @@ SuccessOrStringError FaultInjector::loadBPFProgram() {
 
   d->program_fd = program_fd_exp.takeValue();
   return {};
-}
-
-void FaultInjector::bpf_override_return(llvm::IRBuilder<> &builder,
-                                        llvm::Value *context,
-                                        llvm::Value *exit_code) {
-  // clang-format off
-  auto function_type = llvm::FunctionType::get(
-    llvm::Type::getInt64Ty(d->context),
-
-    {
-      // Context
-      llvm::Type::getInt64PtrTy(d->context),
-
-      // New exit code
-      llvm::Type::getInt64Ty(d->context)
-    },
-
-    false
-  );
-  // clang-format on
-
-  auto function =
-      builder.CreateIntToPtr(builder.getInt64(BPF_FUNC_override_return),
-                             llvm::PointerType::getUnqual(function_type));
-
-  builder.CreateCall(function, {context, exit_code});
-}
-
-llvm::Value *
-FaultInjector::bpf_get_current_pid_tgid(llvm::IRBuilder<> &builder) {
-  // clang-format off
-  auto function_type = llvm::FunctionType::get(
-    llvm::Type::getInt64Ty(d->context),
-    { },
-    false
-  );
-  // clang-format on
-
-  auto function =
-      builder.CreateIntToPtr(builder.getInt64(BPF_FUNC_get_current_pid_tgid),
-                             llvm::PointerType::getUnqual(function_type));
-
-  return builder.CreateCall(function, {});
-}
-
-llvm::Value *FaultInjector::bpf_get_prandom_u32(llvm::IRBuilder<> &builder) {
-  // clang-format off
-  auto function_type = llvm::FunctionType::get(
-    llvm::Type::getInt32Ty(d->context),
-    { },
-    false
-  );
-  // clang-format on
-
-  auto function =
-      builder.CreateIntToPtr(builder.getInt64(BPF_FUNC_get_prandom_u32),
-                             llvm::PointerType::getUnqual(function_type));
-
-  return builder.CreateCall(function, {});
 }
 } // namespace tob::ebpfault
