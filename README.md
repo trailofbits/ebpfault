@@ -4,4 +4,4 @@ This tool is a syscall fault injector built on top of eBPF that has no requireme
 
 | | |
 |-|-|
-| CI Status | ![](https://github.com/trailofbits/ebpfault/workflows/Build/badge.svg) |
+| CI Status | ![](https://github.com/trailofbits/ebpfault/workflows/Linux/badge.svg) |
