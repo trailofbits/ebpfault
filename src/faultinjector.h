@@ -15,7 +15,9 @@
 
 #include <llvm/IR/IRBuilder.h>
 
+#include <tob/ebpf/bpfsyscallinterface.h>
 #include <tob/ebpf/perfeventarray.h>
+
 #include <tob/error/error.h>
 
 namespace tob::ebpfault {
@@ -48,14 +50,10 @@ private:
 
   SuccessOrStringError generateBPFProgram();
 
-  SuccessOrStringError generateFaultSelector(llvm::IRBuilder<> &builder);
+  SuccessOrStringError
+  generateFaultSelector(llvm::IRBuilder<> &builder,
+                        ebpf::BPFSyscallInterface &bpf_syscall_interface);
 
   SuccessOrStringError loadBPFProgram();
-
-  void bpf_override_return(llvm::IRBuilder<> &builder, llvm::Value *context,
-                           llvm::Value *exit_code);
-
-  llvm::Value *bpf_get_current_pid_tgid(llvm::IRBuilder<> &builder);
-  llvm::Value *bpf_get_prandom_u32(llvm::IRBuilder<> &builder);
 };
 } // namespace tob::ebpfault
