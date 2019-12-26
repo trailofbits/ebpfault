@@ -94,7 +94,7 @@ std::string describeFaultValue(std::uint64_t fault_value) {
   }
 
   std::stringstream stream;
-  stream << fault_value << " (0x" << std::hex << fault_value << ")";
+  stream << fault_value << "(0x" << std::hex << fault_value << ")";
 
   return stream.str();
 }

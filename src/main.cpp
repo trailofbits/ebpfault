@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <iostream>
 #include <thread>
+#include <unordered_map>
 
 #include <fcntl.h>
 #include <semaphore.h>
@@ -21,6 +22,74 @@
 #include <unistd.h>
 
 #include <tob/ebpf/perfeventarray.h>
+
+#define EBPFAULT_DUMP_REGISTER(register_name)                                  \
+  do {                                                                         \
+    std::cout << std::setfill(' ') << std::setw(10) << #register_name << " "   \
+              << std::hex << std::setfill('0') << std::setw(16)                \
+              << event_data.register_name << " ";                              \
+  } while (false)
+
+std::unordered_map<std::uint64_t, std::string> event_name_map;
+
+void printEventData(const std::vector<std::uint8_t> &buffer) {
+  if (buffer.size() != 200U) {
+    return;
+  }
+
+  tob::ebpfault::FaultInjector::EventData event_data;
+  std::memcpy(&event_data, buffer.data(), sizeof(event_data));
+
+  std::string event_name;
+  auto event_name_it = event_name_map.find(event_data.event_id);
+  if (event_name_it == event_name_map.end()) {
+    event_name = std::to_string(event_data.event_id);
+  } else {
+    event_name = event_name_it->second;
+  }
+
+  std::cout << "timestamp: " << std::dec << event_data.timestamp
+            << " syscall: " << event_name
+            << " process_id: " << event_data.process_id
+            << " thread_id: " << event_data.thread_id << " injected_error: "
+            << tob::ebpfault::describeFaultValue(event_data.injected_error)
+            << "\n";
+
+  EBPFAULT_DUMP_REGISTER(r15);
+  EBPFAULT_DUMP_REGISTER(r14);
+  EBPFAULT_DUMP_REGISTER(r13);
+  std::cout << "\n";
+
+  EBPFAULT_DUMP_REGISTER(r12);
+  EBPFAULT_DUMP_REGISTER(rbp);
+  EBPFAULT_DUMP_REGISTER(rbx);
+  std::cout << "\n";
+
+  EBPFAULT_DUMP_REGISTER(r11);
+  EBPFAULT_DUMP_REGISTER(r10);
+  EBPFAULT_DUMP_REGISTER(r9);
+  std::cout << "\n";
+
+  EBPFAULT_DUMP_REGISTER(r8);
+  EBPFAULT_DUMP_REGISTER(rax);
+  EBPFAULT_DUMP_REGISTER(rcx);
+  std::cout << "\n";
+
+  EBPFAULT_DUMP_REGISTER(rdx);
+  EBPFAULT_DUMP_REGISTER(rsi);
+  EBPFAULT_DUMP_REGISTER(rdi);
+  std::cout << "\n";
+
+  EBPFAULT_DUMP_REGISTER(orig_rax);
+  EBPFAULT_DUMP_REGISTER(rip);
+  EBPFAULT_DUMP_REGISTER(cs);
+  std::cout << "\n";
+
+  EBPFAULT_DUMP_REGISTER(eflags);
+  EBPFAULT_DUMP_REGISTER(rsp);
+  EBPFAULT_DUMP_REGISTER(ss);
+  std::cout << "\n\n";
+}
 
 int main(int argc, char *argv[], char *envp[]) {
   auto command_line_params_exp = tob::ebpfault::parseCommandLine(argc, argv);
@@ -140,6 +209,9 @@ int main(int argc, char *argv[], char *envp[]) {
     }
 
     auto fault_injector = fault_injector_exp.takeValue();
+
+    event_name_map.insert({fault_injector->eventIdentifier(), config.name});
+
     fault_injector_list.push_back(std::move(fault_injector));
 
     std::cout << "\n";
@@ -166,7 +238,12 @@ int main(int argc, char *argv[], char *envp[]) {
       break;
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::vector<std::uint8_t> buffer;
+    if (!perf_event_array->read(buffer)) {
+      continue;
+    }
+
+    printEventData(buffer);
   }
 
   if (execve_semaphore != nullptr) {

@@ -21,6 +21,7 @@ struct FaultInjector::PrivateData final {
       : perf_event_array(perf_event_array_) {}
 
   ebpf::PerfEventArray &perf_event_array;
+  std::uint32_t event_data_size{0U};
 
   ProcessIDFilter filter;
   Configuration::SyscallFault config;
@@ -49,6 +50,10 @@ FaultInjector::create(ebpf::PerfEventArray &perf_event_array,
 }
 
 FaultInjector::~FaultInjector() {}
+
+std::uint64_t FaultInjector::eventIdentifier() const {
+  return static_cast<std::uint64_t>(d->event_fd.get());
+}
 
 FaultInjector::FaultInjector(ebpf::PerfEventArray &perf_event_array,
                              const Configuration::SyscallFault &config,
@@ -98,12 +103,28 @@ SuccessOrStringError FaultInjector::generateBPFProgram() {
 
   // Generate the pt_regs structure
   std::vector<llvm::Type *> type_list(21U, llvm::Type::getInt64Ty(d->context));
-
-  auto pt_regs_struct = llvm::StructType::create(type_list, "pt_regs", true);
+  auto pt_regs_struct = llvm::StructType::create(type_list, "pt_regs", false);
 
   if (pt_regs_struct == nullptr) {
     return StringError::create("Failed to create the pt_regs structure type");
   }
+
+  // Generate the event data structure (timestamp + event_id + (pid/tgid) +
+  // injected error
+  // + pt_regs)
+  type_list =
+      std::vector<llvm::Type *>(25U, llvm::Type::getInt64Ty(d->context));
+
+  auto event_data_struct =
+      llvm::StructType::create(type_list, "EventData", true);
+
+  if (event_data_struct == nullptr) {
+    return StringError::create(
+        "Failed to create the event data structure type");
+  }
+
+  d->event_data_size = static_cast<std::uint32_t>(
+      ebpf::getLLVMStructureSize(event_data_struct, d->module.get()));
 
   // Create the entry point function
   auto function_type =
@@ -121,16 +142,22 @@ SuccessOrStringError FaultInjector::generateBPFProgram() {
   auto section_name = d->config.name + "_section";
 
   function->setSection(section_name);
-  function->arg_begin()->setName("ctx");
+
+  auto kprobe_context = function->arg_begin();
+  kprobe_context->setName("ctx");
 
   auto entry_bb = llvm::BasicBlock::Create(d->context, "entry", function);
 
-  // Generate the PID filtering logic
+  // Allocate space for the event data
   llvm::IRBuilder<> builder(d->context);
   builder.SetInsertPoint(entry_bb);
 
+  auto event_data = builder.CreateAlloca(event_data_struct);
+
+  // Generate the PID filtering logic
   auto bpf_syscall_interface_exp =
       tob::ebpf::BPFSyscallInterface::create(builder);
+
   if (!bpf_syscall_interface_exp.succeeded()) {
     return bpf_syscall_interface_exp.error();
   }
@@ -169,8 +196,8 @@ SuccessOrStringError FaultInjector::generateBPFProgram() {
     }
 
     builder.SetInsertPoint(fail_syscall_bb);
-    auto gen_status =
-        generateFaultSelector(builder, *bpf_syscall_interface.get());
+    auto gen_status = generateFaultSelector(
+        builder, *bpf_syscall_interface.get(), event_data, kprobe_context);
 
     if (gen_status.failed()) {
       return gen_status.error();
@@ -187,7 +214,8 @@ SuccessOrStringError FaultInjector::generateBPFProgram() {
 
 SuccessOrStringError FaultInjector::generateFaultSelector(
     llvm::IRBuilder<> &builder,
-    ebpf::BPFSyscallInterface &bpf_syscall_interface) {
+    ebpf::BPFSyscallInterface &bpf_syscall_interface, llvm::Value *event_data,
+    llvm::Value *pt_regs) {
 
   struct FaultRange final {
     std::uint8_t start{0U};
@@ -249,6 +277,59 @@ SuccessOrStringError FaultInjector::generateFaultSelector(
     builder.CreateCondBr(inside_range_cond, fail_syscall_bb, continue_bb);
 
     builder.SetInsertPoint(fail_syscall_bb);
+
+    //
+    // Populate the event data structure (timestamp + event_id + (pid/tgid) +
+    // injected error
+    // + pt_regs)
+    //
+
+    // Timestamp
+    auto timestamp = bpf_syscall_interface.ktimeGetNs();
+
+    auto event_data_field_ptr = builder.CreateGEP(
+        event_data, {builder.getInt32(0), builder.getInt32(0U)});
+
+    builder.CreateStore(timestamp, event_data_field_ptr);
+
+    // Event identifier
+    event_data_field_ptr = builder.CreateGEP(
+        event_data, {builder.getInt32(0), builder.getInt32(1U)});
+
+    builder.CreateStore(builder.getInt64(eventIdentifier()),
+                        event_data_field_ptr);
+
+    // Thread id + process id
+    auto pid_tgid = bpf_syscall_interface.getCurrentPidTgid();
+
+    event_data_field_ptr = builder.CreateGEP(
+        event_data, {builder.getInt32(0), builder.getInt32(2U)});
+
+    builder.CreateStore(pid_tgid, event_data_field_ptr);
+
+    // Injected error code
+    event_data_field_ptr = builder.CreateGEP(
+        event_data, {builder.getInt32(0), builder.getInt32(3U)});
+
+    builder.CreateStore(builder.getInt64(fault.exit_code),
+                        event_data_field_ptr);
+
+    // Context structure
+    for (std::uint32_t i = 0U; i < 21U; ++i) {
+      auto reg_value_ptr = builder.CreateGEP(
+          pt_regs, {builder.getInt32(0), builder.getInt32(i)});
+
+      auto reg_value = builder.CreateLoad(reg_value_ptr);
+
+      auto reg_dest_ptr = builder.CreateGEP(
+          event_data, {builder.getInt32(0), builder.getInt32(4 + i)});
+
+      builder.CreateStore(reg_value, reg_dest_ptr);
+    }
+
+    bpf_syscall_interface.perfEventOutput(pt_regs, d->perf_event_array.fd(),
+                                          static_cast<std::uint32_t>(-1LL),
+                                          event_data, d->event_data_size);
 
     bpf_syscall_interface.overrideReturn(current_function->arg_begin(),
                                          fault.exit_code);
