@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include <tob/error/error.h>
+#include <tob/error/stringerror.h>
 
 namespace tob::ebpfault {
 struct CommandLineParameters final {

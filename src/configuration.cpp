@@ -15,7 +15,7 @@
 
 #include <rapidjson/document.h>
 
-#include <tob/error/error.h>
+#include <tob/error/stringerror.h>
 
 namespace tob::ebpfault {
 namespace {

@@ -18,7 +18,7 @@
 #include <tob/ebpf/bpfsyscallinterface.h>
 #include <tob/ebpf/perfeventarray.h>
 
-#include <tob/error/error.h>
+#include <tob/error/stringerror.h>
 
 namespace tob::ebpfault {
 class FaultInjector final {
@@ -30,7 +30,6 @@ public:
     std::vector<int> process_id_list;
   };
 
-#pragma pack(push, 1)
   struct EventData final {
     std::uint64_t timestamp;
     std::uint64_t event_id;
@@ -59,10 +58,6 @@ public:
     std::uint64_t rsp;
     std::uint64_t ss;
   };
-#pragma pack(pop)
-
-  static_assert(sizeof(EventData) == 25 * sizeof(std::uint64_t),
-                "EventData is not correctly defined");
 
   using Ref = std::unique_ptr<FaultInjector>;
   static StringErrorOr<Ref> create(ebpf::PerfEventArray &perf_event_array,
