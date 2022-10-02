@@ -6,6 +6,4 @@
 # the LICENSE file found in the root directory of this source tree.
 #
 
-cmake_minimum_required(VERSION 3.16.1)
-
 add_subdirectory("src")

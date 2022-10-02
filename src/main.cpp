@@ -22,6 +22,7 @@
 #include <unistd.h>
 
 #include <tob/ebpf/perfeventarray.h>
+#include <tob/utils/bufferreader.h>
 
 #define EBPFAULT_DUMP_REGISTER(register_name)                                  \
   do {                                                                         \
@@ -32,63 +33,111 @@
 
 std::unordered_map<std::uint64_t, std::string> event_name_map;
 
-void printEventData(const std::vector<std::uint8_t> &buffer) {
-  if (buffer.size() != 200U) {
-    return;
-  }
-
+std::optional<tob::ebpfault::FaultInjector::EventData>
+getEventData(tob::utils::BufferReader &buffer_reader) {
   tob::ebpfault::FaultInjector::EventData event_data;
-  std::memcpy(&event_data, buffer.data(), sizeof(event_data));
 
-  std::string event_name;
-  auto event_name_it = event_name_map.find(event_data.event_id);
-  if (event_name_it == event_name_map.end()) {
-    event_name = std::to_string(event_data.event_id);
-  } else {
-    event_name = event_name_it->second;
+  try {
+    event_data.timestamp = buffer_reader.u64();
+    event_data.event_id = buffer_reader.u64();
+    event_data.process_id = buffer_reader.u32();
+    event_data.thread_id = buffer_reader.u32();
+    event_data.injected_error = buffer_reader.u64();
+    event_data.r15 = buffer_reader.u64();
+    event_data.r14 = buffer_reader.u64();
+    event_data.r13 = buffer_reader.u64();
+    event_data.r12 = buffer_reader.u64();
+    event_data.rbp = buffer_reader.u64();
+    event_data.rbx = buffer_reader.u64();
+    event_data.r11 = buffer_reader.u64();
+    event_data.r10 = buffer_reader.u64();
+    event_data.r9 = buffer_reader.u64();
+    event_data.r8 = buffer_reader.u64();
+    event_data.rax = buffer_reader.u64();
+    event_data.rcx = buffer_reader.u64();
+    event_data.rdx = buffer_reader.u64();
+    event_data.rsi = buffer_reader.u64();
+    event_data.rdi = buffer_reader.u64();
+    event_data.orig_rax = buffer_reader.u64();
+    event_data.rip = buffer_reader.u64();
+    event_data.cs = buffer_reader.u64();
+    event_data.eflags = buffer_reader.u64();
+    event_data.rsp = buffer_reader.u64();
+    event_data.ss = buffer_reader.u64();
+
+    return event_data;
+
+  } catch (...) {
+    return std::nullopt;
   }
+}
 
-  std::cout << "timestamp: " << std::dec << event_data.timestamp
-            << " syscall: " << event_name
-            << " process_id: " << event_data.process_id
-            << " thread_id: " << event_data.thread_id << " injected_error: "
-            << tob::ebpfault::describeFaultValue(event_data.injected_error)
-            << "\n";
+void printEventData(tob::utils::BufferReader &buffer_reader,
+                    tob::ebpf::PerfEventArray::BufferList buffer_list) {
 
-  EBPFAULT_DUMP_REGISTER(r15);
-  EBPFAULT_DUMP_REGISTER(r14);
-  EBPFAULT_DUMP_REGISTER(r13);
-  std::cout << "\n";
+  for (const auto &buffer : buffer_list) {
+    buffer_reader.reset(buffer);
+    buffer_reader.skipBytes(tob::ebpf::kPerfEventHeaderSize +
+                            sizeof(std::uint32_t));
 
-  EBPFAULT_DUMP_REGISTER(r12);
-  EBPFAULT_DUMP_REGISTER(rbp);
-  EBPFAULT_DUMP_REGISTER(rbx);
-  std::cout << "\n";
+    auto opt_event_data = getEventData(buffer_reader);
+    if (!opt_event_data.has_value()) {
+      std::cerr << "Read error. Skipping event\n";
+      continue;
+    }
 
-  EBPFAULT_DUMP_REGISTER(r11);
-  EBPFAULT_DUMP_REGISTER(r10);
-  EBPFAULT_DUMP_REGISTER(r9);
-  std::cout << "\n";
+    const auto &event_data = opt_event_data.value();
 
-  EBPFAULT_DUMP_REGISTER(r8);
-  EBPFAULT_DUMP_REGISTER(rax);
-  EBPFAULT_DUMP_REGISTER(rcx);
-  std::cout << "\n";
+    std::string event_name;
+    auto event_name_it = event_name_map.find(event_data.event_id);
+    if (event_name_it == event_name_map.end()) {
+      event_name = std::to_string(event_data.event_id);
+    } else {
+      event_name = event_name_it->second;
+    }
 
-  EBPFAULT_DUMP_REGISTER(rdx);
-  EBPFAULT_DUMP_REGISTER(rsi);
-  EBPFAULT_DUMP_REGISTER(rdi);
-  std::cout << "\n";
+    std::cout << "timestamp: " << std::dec << event_data.timestamp
+              << " syscall: " << event_name
+              << " process_id: " << event_data.process_id
+              << " thread_id: " << event_data.thread_id << " injected_error: "
+              << tob::ebpfault::describeFaultValue(event_data.injected_error)
+              << "\n";
 
-  EBPFAULT_DUMP_REGISTER(orig_rax);
-  EBPFAULT_DUMP_REGISTER(rip);
-  EBPFAULT_DUMP_REGISTER(cs);
-  std::cout << "\n";
+    EBPFAULT_DUMP_REGISTER(r15);
+    EBPFAULT_DUMP_REGISTER(r14);
+    EBPFAULT_DUMP_REGISTER(r13);
+    std::cout << "\n";
 
-  EBPFAULT_DUMP_REGISTER(eflags);
-  EBPFAULT_DUMP_REGISTER(rsp);
-  EBPFAULT_DUMP_REGISTER(ss);
-  std::cout << "\n\n";
+    EBPFAULT_DUMP_REGISTER(r12);
+    EBPFAULT_DUMP_REGISTER(rbp);
+    EBPFAULT_DUMP_REGISTER(rbx);
+    std::cout << "\n";
+
+    EBPFAULT_DUMP_REGISTER(r11);
+    EBPFAULT_DUMP_REGISTER(r10);
+    EBPFAULT_DUMP_REGISTER(r9);
+    std::cout << "\n";
+
+    EBPFAULT_DUMP_REGISTER(r8);
+    EBPFAULT_DUMP_REGISTER(rax);
+    EBPFAULT_DUMP_REGISTER(rcx);
+    std::cout << "\n";
+
+    EBPFAULT_DUMP_REGISTER(rdx);
+    EBPFAULT_DUMP_REGISTER(rsi);
+    EBPFAULT_DUMP_REGISTER(rdi);
+    std::cout << "\n";
+
+    EBPFAULT_DUMP_REGISTER(orig_rax);
+    EBPFAULT_DUMP_REGISTER(rip);
+    EBPFAULT_DUMP_REGISTER(cs);
+    std::cout << "\n";
+
+    EBPFAULT_DUMP_REGISTER(eflags);
+    EBPFAULT_DUMP_REGISTER(rsp);
+    EBPFAULT_DUMP_REGISTER(ss);
+    std::cout << "\n\n";
+  }
 }
 
 int main(int argc, char *argv[], char *envp[]) {
@@ -224,6 +273,15 @@ int main(int argc, char *argv[], char *envp[]) {
     }
   }
 
+  auto buffer_reader_exp = tob::utils::BufferReader::create();
+  if (!buffer_reader_exp.succeeded()) {
+    std::cerr << "Failed to create the buffer reader: "
+              << buffer_reader_exp.error().message() << "\n";
+    return 1;
+  }
+
+  auto buffer_reader = buffer_reader_exp.takeValue();
+
   for (;;) {
     std::size_t running_process_count = 0U;
 
@@ -238,12 +296,16 @@ int main(int argc, char *argv[], char *envp[]) {
       break;
     }
 
-    std::vector<std::uint8_t> buffer;
-    if (!perf_event_array->read(buffer)) {
+    tob::ebpf::PerfEventArray::BufferList buffer_list;
+    std::size_t read_error_count{};
+    std::size_t lost_event_count{};
+
+    if (!perf_event_array->read(buffer_list, read_error_count,
+                                lost_event_count)) {
       continue;
     }
 
-    printEventData(buffer);
+    printEventData(*buffer_reader.get(), std::move(buffer_list));
   }
 
   if (execve_semaphore != nullptr) {

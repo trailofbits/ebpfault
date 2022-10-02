@@ -13,6 +13,7 @@
 #include <llvm/IR/Module.h>
 
 #include <tob/ebpf/ebpf_utils.h>
+#include <tob/ebpf/iperfevent.h>
 #include <tob/ebpf/llvm_utils.h>
 
 namespace tob::ebpfault {
@@ -29,7 +30,7 @@ struct FaultInjector::PrivateData final {
   llvm::LLVMContext context;
   std::unique_ptr<llvm::Module> module;
 
-  utils::UniqueFd event_fd;
+  ebpf::IPerfEvent::Ref kprobe_event;
   utils::UniqueFd program_fd;
 };
 
@@ -52,7 +53,7 @@ FaultInjector::create(ebpf::PerfEventArray &perf_event_array,
 FaultInjector::~FaultInjector() {}
 
 std::uint64_t FaultInjector::eventIdentifier() const {
-  return static_cast<std::uint64_t>(d->event_fd.get());
+  return static_cast<std::uint64_t>(d->kprobe_event->fd());
 }
 
 FaultInjector::FaultInjector(ebpf::PerfEventArray &perf_event_array,
@@ -78,12 +79,14 @@ FaultInjector::FaultInjector(ebpf::PerfEventArray &perf_event_array,
   // not
   auto syscall_name = "__x64_sys_" + d->config.name;
 
-  auto event_fd_exp = ebpf::createKprobeEvent(false, syscall_name, 0, -1);
-  if (!event_fd_exp.succeeded()) {
-    throw event_fd_exp.error();
+  auto kprobe_event_exp =
+      ebpf::IPerfEvent::createKprobe(syscall_name, false, false);
+
+  if (!kprobe_event_exp.succeeded()) {
+    throw kprobe_event_exp.error();
   }
 
-  d->event_fd = event_fd_exp.takeValue();
+  d->kprobe_event = kprobe_event_exp.takeValue();
 
   // Generate the program, compile it, then load it
   auto program_status = generateBPFProgram();
@@ -124,7 +127,7 @@ SuccessOrStringError FaultInjector::generateBPFProgram() {
   }
 
   d->event_data_size = static_cast<std::uint32_t>(
-      ebpf::getLLVMStructureSize(event_data_struct, d->module.get()));
+      ebpf::getTypeSize(*d->module.get(), event_data_struct));
 
   // Create the entry point function
   auto function_type =
@@ -328,7 +331,6 @@ SuccessOrStringError FaultInjector::generateFaultSelector(
     }
 
     bpf_syscall_interface.perfEventOutput(pt_regs, d->perf_event_array.fd(),
-                                          static_cast<std::uint32_t>(-1LL),
                                           event_data, d->event_data_size);
 
     bpf_syscall_interface.overrideReturn(current_function->arg_begin(),
@@ -364,16 +366,7 @@ SuccessOrStringError FaultInjector::loadBPFProgram() {
   auto &bpf_program = bpf_program_it->second;
 
   // Load the program
-  auto linux_version_code_exp = ebpf::getLinuxKernelVersionCode();
-  if (!linux_version_code_exp.succeeded()) {
-    return linux_version_code_exp.error();
-  }
-
-  auto linux_version_code = linux_version_code_exp.takeValue();
-
-  auto program_fd_exp = ebpf::loadProgram(
-      bpf_program, d->event_fd.get(), BPF_PROG_TYPE_KPROBE, linux_version_code);
-
+  auto program_fd_exp = ebpf::loadProgram(bpf_program, *d->kprobe_event.get());
   if (!program_fd_exp.succeeded()) {
     throw program_fd_exp.error();
   }

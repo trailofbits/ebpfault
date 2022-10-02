@@ -6,7 +6,5 @@
 # the LICENSE file found in the root directory of this source tree.
 #
 
-cmake_minimum_required(VERSION 3.16.1)
-
-set(EBPFAULT_VERSION "1.0.2")
+set(EBPFAULT_VERSION "1.1.0")
 

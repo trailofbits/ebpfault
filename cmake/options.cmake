@@ -6,6 +6,4 @@
 # the LICENSE file found in the root directory of this source tree.
 #
 
-cmake_minimum_required(VERSION 3.16.1)
-
 option(EBPFAULT_ENABLE_INSTALL "Set to ON to enable the install target")
