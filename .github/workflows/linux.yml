@@ -1,0 +1,136 @@
+#
+# Copyright (c) 2019-present, Trail of Bits, Inc.
+# All rights reserved.
+#
+# This source code is licensed in accordance with the terms specified in
+# the LICENSE file found in the root directory of this source tree.
+#
+
+name: Linux
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        required: true
+        type: string
+
+      build_type:
+        required: true
+        type: string
+
+      osquery_toolchain_version:
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ${{ inputs.platform }}
+
+    env:
+      CACHE_KEY: platform-${{ inputs.platform }}_type-${{ inputs.build_type }}
+
+    steps:
+      - name: Update the environment variables
+        run: |
+          echo "CCACHE_DIR=${{ github.workspace }}/ccache" >> $GITHUB_ENV
+          echo "DOWNLOADS_PATH=${{ github.workspace }}/downloads" >> $GITHUB_ENV
+          echo "TOOLCHAIN_PATH=${{ github.workspace }}/osquery-toolchain-${{ inputs.osquery_toolchain_version }}" >> $GITHUB_ENV
+          echo "DESTDIR=${{ github.workspace }}/install" >> $GITHUB_ENV
+
+      - name: Update the ccache cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache_${{ env.CACHE_KEY }}-${{ github.sha }}
+          restore-keys: ccache_${{ env.CACHE_KEY }}
+
+      - name: Update the downloads cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.DOWNLOADS_PATH }}
+          key: downloads_${{ env.CACHE_KEY }}-${{ github.sha }}
+          restore-keys: downloads_${{ env.CACHE_KEY }}
+
+      - name: Create the build folders
+        run: |
+          mkdir -p \
+            ${{ env.CCACHE_DIR }} \
+            ${{ env.DOWNLOADS_PATH }} \
+            ${{ env.DESTDIR }} \
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get install -y \
+            ccache \
+            ninja-build \
+            cmake
+
+      - name: Install the osquery-toolchain
+        id: osquery_toolchain_installer
+        run: |
+          if [ ! -f "${{ env.DOWNLOADS_PATH }}/osquery-toolchain-${{ inputs.osquery_toolchain_version }}.tar.xz" ] ; then
+            curl \
+              -L \
+              "https://github.com/osquery/osquery-toolchain/releases/download/${{ inputs.osquery_toolchain_version }}/osquery-toolchain-${{ inputs.osquery_toolchain_version }}-x86_64.tar.xz" \
+              -o \
+              "${{ env.DOWNLOADS_PATH }}/osquery-toolchain-${{ inputs.osquery_toolchain_version }}.tar.xz"
+          fi
+
+          tar \
+            xf \
+            "${{ env.DOWNLOADS_PATH }}/osquery-toolchain-${{ inputs.osquery_toolchain_version }}.tar.xz"
+
+          mv \
+            osquery-toolchain \
+            ${{ env.TOOLCHAIN_PATH }}
+
+      - name: Clone the ebpfault source code
+        uses: actions/checkout@v3
+        with:
+          repository: trailofbits/ebpfault
+          path: ebpfault
+          fetch-depth: 0
+
+      - name: Initialize the submodules
+        working-directory: ${{ github.workspace }}/ebpfault
+        run: |
+          git submodule update --init --recursive
+
+      - name: Configure the project
+        run: |
+          cmake \
+            -G Ninja \
+            -S ebpfault \
+            -B build-ebpfault \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=${{ inputs.build_type }} \
+            -DEBPFAULT_ENABLE_INSTALL=true
+
+      - name: Build the project
+        run: |
+          cmake \
+            --build build-ebpfault \
+            -v
+
+      - name: Install the project
+        run: |
+          cmake \
+            --build build-ebpfault \
+            --target install
+
+      - name: Configure the packaging project
+        run: |
+          cmake \
+            -G Ninja \
+            -S ebpfault/package_generator \
+            -B build-ebpfault/package \
+            -DCMAKE_BUILD_TYPE=${{ inputs.build_type }} \
+            -DEBPFAULT_INSTALL_PATH=${{ env.DESTDIR }}
+
+      - name: Build the package
+        run: |
+          cmake \
+            --build build-ebpfault/package \
+            --target package \
+            -v
