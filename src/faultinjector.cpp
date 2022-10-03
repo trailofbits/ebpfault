@@ -13,7 +13,7 @@
 #include <llvm/IR/Module.h>
 
 #include <tob/ebpf/ebpf_utils.h>
-#include <tob/ebpf/iperfevent.h>
+#include <tob/ebpf/ievent.h>
 #include <tob/ebpf/llvm_utils.h>
 
 namespace tob::ebpfault {
@@ -30,7 +30,7 @@ struct FaultInjector::PrivateData final {
   llvm::LLVMContext context;
   std::unique_ptr<llvm::Module> module;
 
-  ebpf::IPerfEvent::Ref kprobe_event;
+  ebpf::IEvent::Ref kprobe_event;
   utils::UniqueFd program_fd;
 };
 
@@ -80,7 +80,7 @@ FaultInjector::FaultInjector(ebpf::PerfEventArray &perf_event_array,
   auto syscall_name = "__x64_sys_" + d->config.name;
 
   auto kprobe_event_exp =
-      ebpf::IPerfEvent::createKprobe(syscall_name, false, false);
+      ebpf::IEvent::createKprobe(syscall_name, false, false);
 
   if (!kprobe_event_exp.succeeded()) {
     throw kprobe_event_exp.error();
