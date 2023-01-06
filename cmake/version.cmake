@@ -6,5 +6,5 @@
 # the LICENSE file found in the root directory of this source tree.
 #
 
-set(EBPFAULT_VERSION "1.1.0")
+set(EBPFAULT_VERSION "1.1.1")
 
