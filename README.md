@@ -65,7 +65,7 @@ ebpfault --config /path/to/config.json --except-pid-list --pid_list pid1,pid2,pi
 * A recent Clang/LLVM installation (9.0 or better), compiled with BPF support
 * A recent libc++ or stdc++ library, supporting C++17
 * CMake >= 3.21.4. A pre-built binary can be downloaded from the [CMake's download page](https://cmake.org/download/).
-* Linux kernel >= 5.x (tested on Ubuntu 19.10) with the `CONFIG_BPF_KPROBE_OVERRIDE` option enabled
+* :warning: Linux kernel >= 5.x (tested on Ubuntu 19.10) with the `CONFIG_BPF_KPROBE_OVERRIDE` option enabled
 
 ### Building
 

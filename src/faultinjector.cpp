@@ -75,9 +75,18 @@ FaultInjector::FaultInjector(ebpf::PerfEventArray &perf_event_array,
     throw StringError::create("Fault configuration exceeds 100% probability");
   }
 
+  std::string arch;
+  #if __x86_64__
+    arch = "x64";
+  #elif __arm__ || __aarch64__
+    arch = "arm64";
+  #else
+    throw StringError::create("The current architecture is not valid. Supported: arm or x86_64.");
+  #endif
+
   // Create the event first, so we know whether the given system call exists or
   // not
-  auto syscall_name = "__x64_sys_" + d->config.name;
+  auto syscall_name = "__" + arch + "_sys_" + d->config.name;
 
   auto kprobe_event_exp =
       ebpf::IEvent::createKprobe(syscall_name, false, false);
