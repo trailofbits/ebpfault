@@ -76,13 +76,14 @@ FaultInjector::FaultInjector(ebpf::PerfEventArray &perf_event_array,
   }
 
   std::string arch;
-  #if __x86_64__
-    arch = "x64";
-  #elif __arm__ || __aarch64__
-    arch = "arm64";
-  #else
-    throw StringError::create("The current architecture is not valid. Supported: arm or x86_64.");
-  #endif
+#if __x86_64__
+  arch = "x64";
+#elif __arm__ || __aarch64__
+  arch = "arm64";
+#else
+  throw StringError::create(
+      "The current architecture is not valid. Supported: arm or x86_64.");
+#endif
 
   // Create the event first, so we know whether the given system call exists or
   // not
