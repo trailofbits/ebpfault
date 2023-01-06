@@ -33,60 +33,13 @@
 
 std::unordered_map<std::uint64_t, std::string> event_name_map;
 
-std::optional<tob::ebpfault::FaultInjector::EventData>
-getEventData(tob::utils::BufferReader &buffer_reader) {
-  tob::ebpfault::FaultInjector::EventData event_data;
-
-  try {
-    event_data.timestamp = buffer_reader.u64();
-    event_data.event_id = buffer_reader.u64();
-    event_data.process_id = buffer_reader.u32();
-    event_data.thread_id = buffer_reader.u32();
-    event_data.injected_error = buffer_reader.u64();
-    event_data.r15 = buffer_reader.u64();
-    event_data.r14 = buffer_reader.u64();
-    event_data.r13 = buffer_reader.u64();
-    event_data.r12 = buffer_reader.u64();
-    event_data.rbp = buffer_reader.u64();
-    event_data.rbx = buffer_reader.u64();
-    event_data.r11 = buffer_reader.u64();
-    event_data.r10 = buffer_reader.u64();
-    event_data.r9 = buffer_reader.u64();
-    event_data.r8 = buffer_reader.u64();
-    event_data.rax = buffer_reader.u64();
-    event_data.rcx = buffer_reader.u64();
-    event_data.rdx = buffer_reader.u64();
-    event_data.rsi = buffer_reader.u64();
-    event_data.rdi = buffer_reader.u64();
-    event_data.orig_rax = buffer_reader.u64();
-    event_data.rip = buffer_reader.u64();
-    event_data.cs = buffer_reader.u64();
-    event_data.eflags = buffer_reader.u64();
-    event_data.rsp = buffer_reader.u64();
-    event_data.ss = buffer_reader.u64();
-
-    return event_data;
-
-  } catch (...) {
-    return std::nullopt;
-  }
-}
-
 void printEventData(tob::utils::BufferReader &buffer_reader,
                     tob::ebpf::PerfEventArray::BufferList buffer_list) {
 
-  for (const auto &buffer : buffer_list) {
-    buffer_reader.reset(buffer);
-    buffer_reader.skipBytes(tob::ebpf::kPerfEventHeaderSize +
-                            sizeof(std::uint32_t));
+  auto event_data_list = tob::ebpfault::FaultInjector::parseEventData(
+      buffer_reader, std::move(buffer_list));
 
-    auto opt_event_data = getEventData(buffer_reader);
-    if (!opt_event_data.has_value()) {
-      std::cerr << "Read error. Skipping event\n";
-      continue;
-    }
-
-    const auto &event_data = opt_event_data.value();
+  for (const auto &event_data : event_data_list) {
 
     std::string event_name;
     auto event_name_it = event_name_map.find(event_data.event_id);
@@ -103,40 +56,21 @@ void printEventData(tob::utils::BufferReader &buffer_reader,
               << tob::ebpfault::describeFaultValue(event_data.injected_error)
               << "\n";
 
-    EBPFAULT_DUMP_REGISTER(r15);
-    EBPFAULT_DUMP_REGISTER(r14);
-    EBPFAULT_DUMP_REGISTER(r13);
-    std::cout << "\n";
+    std::size_t index{1};
+    for (const auto &register_map_p : event_data.register_map) {
+      const auto &register_name = register_map_p.first;
+      const auto &register_value = register_map_p.second;
 
-    EBPFAULT_DUMP_REGISTER(r12);
-    EBPFAULT_DUMP_REGISTER(rbp);
-    EBPFAULT_DUMP_REGISTER(rbx);
-    std::cout << "\n";
+      std::cout << std::setfill(' ') << std::setw(10) << register_name << " "
+                << std::hex << std::setfill('0') << std::setw(16)
+                << register_value << " ";
 
-    EBPFAULT_DUMP_REGISTER(r11);
-    EBPFAULT_DUMP_REGISTER(r10);
-    EBPFAULT_DUMP_REGISTER(r9);
-    std::cout << "\n";
+      if ((index % 3) == 0) {
+        std::cout << "\n";
+      }
 
-    EBPFAULT_DUMP_REGISTER(r8);
-    EBPFAULT_DUMP_REGISTER(rax);
-    EBPFAULT_DUMP_REGISTER(rcx);
-    std::cout << "\n";
-
-    EBPFAULT_DUMP_REGISTER(rdx);
-    EBPFAULT_DUMP_REGISTER(rsi);
-    EBPFAULT_DUMP_REGISTER(rdi);
-    std::cout << "\n";
-
-    EBPFAULT_DUMP_REGISTER(orig_rax);
-    EBPFAULT_DUMP_REGISTER(rip);
-    EBPFAULT_DUMP_REGISTER(cs);
-    std::cout << "\n";
-
-    EBPFAULT_DUMP_REGISTER(eflags);
-    EBPFAULT_DUMP_REGISTER(rsp);
-    EBPFAULT_DUMP_REGISTER(ss);
-    std::cout << "\n\n";
+      ++index;
+    }
   }
 }
 
@@ -205,7 +139,6 @@ int main(int argc, char *argv[], char *envp[]) {
           command_line_params.opt_exec_command_line.value();
 
       auto path = exec_command_line.at(0);
-      // exec_command_line.erase(exec_command_line.begin());
 
       std::vector<char *> exec_argv;
       for (auto &param : exec_command_line) {

@@ -9,6 +9,8 @@
 #include "faultinjector.h"
 #include "utils.h"
 
+#include <iostream>
+
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Module.h>
 
@@ -17,6 +19,32 @@
 #include <tob/ebpf/llvm_utils.h>
 
 namespace tob::ebpfault {
+
+namespace {
+
+//
+// Register list. Make sure that the order is the same as the
+// struct pt_regs definition!
+//
+
+const std::vector<std::string> kRegisterList {
+#if __x86_64__
+  "r15", "r14", "r13", "r12", "rbp", "rbx", "r11", "r10", "r9", "r8", "rax",
+      "rcx", "rdx", "rsi", "rdi", "orig_rax", "rip", "cs", "eflags", "rsp", "ss"
+
+#elif __arm__ || __aarch64__
+  "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11",
+      "r12", "r13", "r14", "r15", "r16", "r17", "r18", "r19", "r20", "r21",
+      "r22", "r23", "r24", "r25", "r26", "r27", "r28", "r29", "r30", "sp", "pc",
+      "pstate"
+
+#else
+#error Unsupported architecture
+#endif
+};
+
+} // namespace
+
 struct FaultInjector::PrivateData final {
   PrivateData(ebpf::PerfEventArray &perf_event_array_)
       : perf_event_array(perf_event_array_) {}
@@ -56,6 +84,44 @@ std::uint64_t FaultInjector::eventIdentifier() const {
   return static_cast<std::uint64_t>(d->kprobe_event->fd());
 }
 
+std::vector<FaultInjector::EventData>
+FaultInjector::parseEventData(utils::BufferReader &buffer_reader,
+                              ebpf::PerfEventArray::BufferList &&buffer_list) {
+
+  std::vector<FaultInjector::EventData> event_data_list;
+
+  for (const auto &buffer : buffer_list) {
+    buffer_reader.reset(buffer);
+    buffer_reader.skipBytes(tob::ebpf::kPerfEventHeaderSize +
+                            sizeof(std::uint32_t));
+
+    EventData event_data{};
+
+    try {
+      event_data.timestamp = buffer_reader.u64();
+      event_data.event_id = buffer_reader.u64();
+      event_data.process_id = buffer_reader.u32();
+      event_data.thread_id = buffer_reader.u32();
+      event_data.injected_error = buffer_reader.u64();
+
+      for (const auto &register_name : kRegisterList) {
+        auto register_value = buffer_reader.u64();
+        event_data.register_map.insert({register_name, register_value});
+      }
+
+      event_data_list.push_back(std::move(event_data));
+
+    } catch (...) {
+      std::cerr
+          << "Failed to read the current event. Skipping to the next one...\n";
+    }
+
+    event_data = {};
+  }
+
+  return event_data_list;
+}
+
 FaultInjector::FaultInjector(ebpf::PerfEventArray &perf_event_array,
                              const Configuration::SyscallFault &config,
                              const ProcessIDFilter &filter)
@@ -76,13 +142,14 @@ FaultInjector::FaultInjector(ebpf::PerfEventArray &perf_event_array,
   }
 
   std::string arch;
-  #if __x86_64__
-    arch = "x64";
-  #elif __arm__ || __aarch64__
-    arch = "arm64";
-  #else
-    throw StringError::create("The current architecture is not valid. Supported: arm or x86_64.");
-  #endif
+#if __x86_64__
+  arch = "x64";
+#elif __arm__ || __aarch64__
+  arch = "arm64";
+#else
+  throw StringError::create(
+      "The current architecture is not valid. Supported: arm or x86_64.");
+#endif
 
   // Create the event first, so we know whether the given system call exists or
   // not
@@ -113,22 +180,25 @@ SuccessOrStringError FaultInjector::generateBPFProgram() {
   d->module =
       ebpf::createLLVMModule(d->context, d->config.name + "_FaultInjector");
 
-  // Generate the pt_regs structure
-  std::vector<llvm::Type *> type_list(21U, llvm::Type::getInt64Ty(d->context));
-  auto pt_regs_struct = llvm::StructType::create(type_list, "pt_regs", false);
+  // Get the pt_regs structure for our processor
+  auto pt_regs_struct_exp =
+      ebpf::getPtRegsStructure(*d->module.get(), "pt_regs");
 
-  if (pt_regs_struct == nullptr) {
-    return StringError::create("Failed to create the pt_regs structure type");
+  if (!pt_regs_struct_exp.succeeded()) {
+    return pt_regs_struct_exp.error();
   }
 
+  auto pt_regs_struct = pt_regs_struct_exp.takeValue();
+
   // Generate the event data structure (timestamp + event_id + (pid/tgid) +
-  // injected error
-  // + pt_regs)
-  type_list =
-      std::vector<llvm::Type *>(25U, llvm::Type::getInt64Ty(d->context));
+  // injected error + pt_regs)
+  std::vector<llvm::Type *> event_data_type_list(
+      4U, llvm::Type::getInt64Ty(d->context));
+
+  event_data_type_list.push_back(pt_regs_struct);
 
   auto event_data_struct =
-      llvm::StructType::create(type_list, "EventData", true);
+      llvm::StructType::create(event_data_type_list, "EventData", true);
 
   if (event_data_struct == nullptr) {
     return StringError::create(
@@ -161,8 +231,7 @@ SuccessOrStringError FaultInjector::generateBPFProgram() {
   auto entry_bb = llvm::BasicBlock::Create(d->context, "entry", function);
 
   // Allocate space for the event data
-  llvm::IRBuilder<> builder(d->context);
-  builder.SetInsertPoint(entry_bb);
+  llvm::IRBuilder<> builder(entry_bb);
 
   auto event_data = builder.CreateAlloca(event_data_struct);
 
@@ -290,11 +359,8 @@ SuccessOrStringError FaultInjector::generateFaultSelector(
 
     builder.SetInsertPoint(fail_syscall_bb);
 
-    //
     // Populate the event data structure (timestamp + event_id + (pid/tgid) +
-    // injected error
-    // + pt_regs)
-    //
+    // injected error + pt_regs)
 
     // Timestamp
     auto timestamp = bpf_syscall_interface.ktimeGetNs();
@@ -326,15 +392,22 @@ SuccessOrStringError FaultInjector::generateFaultSelector(
     builder.CreateStore(builder.getInt64(fault.exit_code),
                         event_data_field_ptr);
 
-    // Context structure
-    for (std::uint32_t i = 0U; i < 21U; ++i) {
+    // pt_regs structure
+    auto &module = *fail_syscall_bb->getModule();
+
+    auto pt_regs_type = module.getTypeByName("pt_regs");
+    auto pt_regs_member_count =
+        static_cast<std::uint32_t>(pt_regs_type->getNumElements());
+
+    for (std::uint32_t i = 0U; i < pt_regs_member_count; ++i) {
       auto reg_value_ptr = builder.CreateGEP(
           pt_regs, {builder.getInt32(0), builder.getInt32(i)});
 
       auto reg_value = builder.CreateLoad(reg_value_ptr);
 
       auto reg_dest_ptr = builder.CreateGEP(
-          event_data, {builder.getInt32(0), builder.getInt32(4 + i)});
+          event_data,
+          {builder.getInt32(0), builder.getInt32(4U), builder.getInt32(i)});
 
       builder.CreateStore(reg_value, reg_dest_ptr);
     }
