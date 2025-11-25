@@ -86,7 +86,7 @@ jobs:
             ${{ env.TOOLCHAIN_PATH }}
 
       - name: Clone the ebpfault source code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           repository: trailofbits/ebpfault
           path: ebpfault
